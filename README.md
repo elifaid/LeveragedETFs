@@ -1,2 +1,3 @@
-# LeveragedETFs
-Leveraged ETF simulator
+# Leveraged ETFs
+Leveraged ETF simulator using Quantmod and Rshiny for visualizations
+
