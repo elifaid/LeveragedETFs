@@ -67,7 +67,7 @@ server <- function(input, output) {
             theme(plot.title = element_text(size=24, face="bold",margin = margin(10, 0, 10, 0)))+
             theme_light()+
             scale_x_date(date_labels = "%Y",date_breaks="5 years")+
-            geom_line(aes(y=adjusted/adjusted[1],color='Original'))+
+            geom_line(aes(y=adjusted,color='Original'))+
             scale_colour_manual(name = 'Legend', 
                                 values =c('Simulated'='steelblue','Original'='red',"Moving Average"="green"))+
             theme(plot.title = element_text(size=18, face="bold",margin = margin(10, 0, 10, 0)))
@@ -89,7 +89,8 @@ server <- function(input, output) {
         # generate bins based on input$bins from ui.R
         today<-Cashflows()%>%filter(row_number()==n())%>%select(date)%>%pull()
         g<-ggplot(data=Cashflows(),aes(x=date))+
-            geom_line(aes(y=DCA_val,color = "Value"))+
+            geom_line(aes(y=DCA_val,color = "Leveraged"))+
+            geom_line(aes(y=DCA_val2,color = "Unleveraged"))+
             xlab("Year")+
             ylab("Balance")+
             ggtitle(paste0("Initial Amount of $",input$initial, " with $",
@@ -98,7 +99,7 @@ server <- function(input, output) {
             theme_light()+
             theme(plot.title = element_text(size=18, face="bold",margin = margin(10, 0, 10, 0)))+
             scale_x_date(date_labels = "%Y")+
-            geom_line(aes(y=new_line,color='Contributions'))+
+            geom_line(aes(y=Contributions,color='Contributions'))+
             scale_colour_manual(name = 'Legend',values = "red",labels="Amount Contributed")+
             geom_text(data=. %>% filter(date =="2020-02-20"|
                                             date =="2007-10-09"|
@@ -108,7 +109,7 @@ server <- function(input, output) {
                                             date =="2009-03-05"|
                                             date =="2002-10-09"),aes(y=DCA_val,label=dollar(DCA_val),vjust=1))+
             scale_colour_manual(name = 'Legend', 
-                                values =c('Value'='steelblue','Contributions'='red'))+scale_y_continuous(labels=scales::dollar_format())
+                                values =c('Leveraged'='steelblue','Contributions'='red','Unleveraged'='Grey'))+scale_y_continuous(labels=scales::dollar_format())
             g<-g+if(input$LOG==TRUE){scale_y_continuous(breaks =10^(-10:10),
                                                        labels=scales::dollar_format(),
                                                        minor_breaks=rep(1:9, 21)*(10^rep(-10:10, each=9)),
@@ -148,6 +149,7 @@ server <- function(input, output) {
         })
     Main_dataset<- reactive({
         Main_dataset_load()%>%
+            mutate(adjusted=adjusted/adjusted[1])%>%
             mutate(growth=(adjusted/lag(adjusted)-1))%>%
             mutate(growth=ifelse(row_number()==1,0,growth)) %>%
             mutate(new_val=cumprod(1+growth*input$leverage-(input$ER/100)/252))%>%
@@ -172,7 +174,11 @@ server <- function(input, output) {
                 mutate(shares=contrib/new_val)%>%
                 mutate(total_shares=cumsum(shares))%>%
                 mutate(DCA_val=total_shares*new_val)%>%
-                mutate(new_line=cumsum(contrib))
+                
+                mutate(shares2=contrib/adjusted)%>%
+                mutate(total_shares2=cumsum(shares2))%>%
+                mutate(DCA_val2=total_shares2*adjusted)%>%
+                mutate(Contributions=cumsum(contrib))
             
             
         })
