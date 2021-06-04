@@ -12,27 +12,29 @@ library(tidyverse)
 library(tidyquant)
 library(plotly)
 library(scales)
+library(DT)
 
 ui <- fluidPage(
 
     # Application title
     titlePanel("Simulating Leveraged ETFs using Quantmod"),
-    uiOutput("Message"),
+    uiOutput("Message1"),
     # Sidebar with a inputs 
     sidebarLayout(
         sidebarPanel(
 
             dateInput("date", 
                                h3("Date input"), 
-                               value = "2000-01-01"),
+                               value = "1988-01-01"),
             textInput("ticker","ticker",value="^sp500tr"),
-            numericInput("ER","Expense ratio (%)",value=1),
+            numericInput("ER","Expense ratio (%)",value=0.98),
             numericInput("leverage","Leverage (x) ",value=3),
-            numericInput("initial","Initial Amount ",value=0),
-            numericInput("cashflow","Monthly contribution ($) ",value=1000),
+            numericInput("initial","Initial Amount ",value=1000),
+            numericInput("cashflow","Monthly contribution ($) ",value=100),
             checkboxInput("LOG","Logarithmic Y axis?",value=TRUE),
-            checkboxInput("MA","Moving Average strategy?",value=FALSE),
-            uiOutput("message"),
+            numericInput("MA","Moving Average:",value=200),
+            selectInput("Strategy","Deleverage under 200 MA ?",choices=c("Cash","Go to 1x","-1")),
+            uiOutput("Message2"),
             width = 2
         ),
 
@@ -45,7 +47,8 @@ ui <- fluidPage(
             fluidRow( #two plots side by side
                 column(6,plotlyOutput("CAGRPlot",height="720px")),
                 column(6,plotlyOutput("Different_Leverages",height="720px"))
-            )
+            ),
+            dataTableOutput("Results_Table")
             
         )
     )
@@ -55,7 +58,10 @@ ui <- fluidPage(
 server <- function(input, output) {
 
     output$Comparison <- renderPlotly({
-       g<-ggplot(data=Main_dataset(),aes(x=date))+geom_line(aes(color = "Simulated",y=new_val))+
+       g<-ggplot(data=Main_dataset(),aes(x=date))+
+            geom_line(aes(color = "Simulated",y=new_val))+
+            geom_line(aes(color = "Simulated (200 MA Strategy)",y=new_val_ma))+
+            geom_line(aes(y=underlyingma,color='Moving Average'))+
             xlab("Year")+
             ylab("Growth of $1")+
             ggtitle(paste0("Growth of ",
@@ -69,15 +75,18 @@ server <- function(input, output) {
             scale_x_date(date_labels = "%Y",date_breaks="5 years")+
             geom_line(aes(y=adjusted,color='Original'))+
             scale_colour_manual(name = 'Legend', 
-                                values =c('Simulated'='steelblue','Original'='red',"Moving Average"="green"))+
+                                values =c('Simulated'='steelblue',
+                                          'Original'='red',
+                                          "Moving Average"="green",
+                                          "Simulated (200 MA Strategy)"="grey"))+
             theme(plot.title = element_text(size=18, face="bold",margin = margin(10, 0, 10, 0)))
        g<-g+if(input$LOG==TRUE){scale_y_log10(breaks =10^(-10:10),
+                                              labels=scales::label_comma(),
                                       minor_breaks=rep(1:9, 21)*(10^rep(-10:10, each=9)))}
-       g<-g+if(input$MA==TRUE){geom_line(aes(y=underlying200ma/adjusted[1],color='Moving Average'))}
-        
+
     })
     output$Difference <- renderPlotly({
-            ggplot(data=Main_dataset(),aes(x=date))+geom_line(aes(y=new_val/(adjusted/adjusted[1])))+
+            ggplot(data=Main_dataset(),aes(x=date))+geom_line(aes(y=new_val_ma/new_val))+
             xlab("Year")+
             ggtitle("Leveraged/Original")+
             theme(plot.title = element_text(size=24, face="bold",margin = margin(10, 0, 10, 0)))+
@@ -91,6 +100,7 @@ server <- function(input, output) {
         g<-ggplot(data=Cashflows(),aes(x=date))+
             geom_line(aes(y=DCA_val,color = "Leveraged"))+
             geom_line(aes(y=DCA_val2,color = "Unleveraged"))+
+            geom_line(aes(y=DCA_val3,color = "Leveraged (200 MA Strategy)"))+
             xlab("Year")+
             ylab("Balance")+
             ggtitle(paste0("Initial Amount of $",input$initial, " with $",
@@ -105,11 +115,16 @@ server <- function(input, output) {
                                             date =="2007-10-09"|
                                             date =="2000-03-10"|
                                             date ==today ),aes(y=DCA_val,label=dollar(DCA_val),vjust=-1.2))+
+            geom_text(data=. %>% filter(date ==today ),aes(y=DCA_val3,label=dollar(DCA_val3)))+
             geom_text(data=. %>% filter(date =="2020-03-23"|
                                             date =="2009-03-05"|
                                             date =="2002-10-09"),aes(y=DCA_val,label=dollar(DCA_val),vjust=1))+
+            
             scale_colour_manual(name = 'Legend', 
-                                values =c('Leveraged'='steelblue','Contributions'='red','Unleveraged'='Grey'))+scale_y_continuous(labels=scales::dollar_format())
+                                values =c('Leveraged'='steelblue',
+                                          'Contributions'='green',
+                                          'Unleveraged'='red',
+                                          "Leveraged (200 MA Strategy)"="Grey"))+scale_y_continuous(labels=scales::dollar_format())
             g<-g+if(input$LOG==TRUE){scale_y_continuous(breaks =10^(-10:10),
                                                        labels=scales::dollar_format(),
                                                        minor_breaks=rep(1:9, 21)*(10^rep(-10:10, each=9)),
@@ -152,11 +167,21 @@ server <- function(input, output) {
             mutate(adjusted=adjusted/adjusted[1])%>%
             mutate(growth=(adjusted/lag(adjusted)-1))%>%
             mutate(growth=ifelse(row_number()==1,0,growth)) %>%
-            mutate(new_val=cumprod(1+growth*input$leverage-(input$ER/100)/252))%>%
+            mutate(leverage=input$leverage)%>%
+            mutate(new_val=cumprod(1+growth*leverage-(input$ER/100)/252))%>%
             mutate(CAGR=((new_val/new_val[1])^(1/(as.numeric(difftime(as.Date(date), as.Date(date[1])))/(60*60*24*365))))-1)%>%
             mutate(Yr_rolling_average=new_val/(lag(new_val,253))-1)%>%
-            mutate(underlying200ma=SMA(adjusted,200))%>%
-            mutate(under200=ifelse(lag(adjusted)<underlying200ma,TRUE,FALSE))
+
+            mutate(underlyingma=(SMA(adjusted,input$MA))/adjusted[1])%>%
+            mutate(underma=ifelse(adjusted<underlyingma,"Yes","No"))%>% # moving Average Strategy
+            mutate(action=ifelse(is.na(underma),"BUY",
+                                 ifelse(underma=="Yes","SELL","BUY"))) %>%
+            mutate(leverage=ifelse(row_number()>1,ifelse(lag(action)=="SELL",ifelse(input$Strategy=="Cash",
+                                                                                    0,
+                                                                                    ifelse(input$Strategy=="-1", 
+                                                                                           -1,
+                                                                                           1)),leverage),leverage))%>%  
+            mutate(new_val_ma=cumprod(1+growth*leverage-(input$ER/100)/252))
         
     })
 
@@ -175,11 +200,14 @@ server <- function(input, output) {
                 mutate(total_shares=cumsum(shares))%>%
                 mutate(DCA_val=total_shares*new_val)%>%
                 
+                mutate(shares3=contrib/new_val_ma)%>%
+                mutate(total_shares3=cumsum(shares3))%>%
+                mutate(DCA_val3=total_shares3*new_val_ma)%>%
+                
                 mutate(shares2=contrib/adjusted)%>%
                 mutate(total_shares2=cumsum(shares2))%>%
                 mutate(DCA_val2=total_shares2*adjusted)%>%
                 mutate(Contributions=cumsum(contrib))
-            
             
         })
 
@@ -219,20 +247,28 @@ server <- function(input, output) {
             )
     
     })
-    output$Message<- renderUI({
+    output$Message1<- renderUI({
         HTML("Sp500 total return up to 1988: ^SP500TR, earlier ^GSPC <br>
-             Nasdaq 100 ^NDX")
+             Nasdaq 100: ^NDX<br>
+             Bitcoin: BTC-USD<br>
+             Ethereum: ETH-USD")
     })    
-    output$message<- renderUI({
-        x<-Main_dataset()%>%filter(row_number()==n())
-        HTML(paste("As of",
-              x %>% select(date)%>% pull(),
-              ":<br> Total Contributions: ",
-              dollar_format()(sum(Cashflows()$contrib)),
-              "<br> Final Value:", 
-              dollar_format()(Cashflows()%>%filter(row_number()==n()) %>% select(DCA_val)%>% pull()),
-              "<br> CAGR of (for inital amount only):",
-              percent(x %>% select(CAGR)%>% pull(),.11)))
+
+    output$Results_Table<- DT::renderDataTable({
+        datatable(Cashflows()%>% filter(row_number()==n()|
+                                       date =="2020-02-20"|
+                                       date =="2002-10-09"|
+                                       date =="2007-10-09"|
+                                       date =="2009-03-05"|
+                                       date =="2000-03-10"|
+                                       date =="2020-03-23"
+                                       
+                                       )%>% 
+            select(date,Contributions,DCA_val2,DCA_val,DCA_val3),colnames = c('Date','Contributions', 'Unleveraged', 'Leveraged', 'Leveraged with Strategy'))%>%
+            formatCurrency(c('Contributions', 'DCA_val2', 'DCA_val3', 'DCA_val'), currency = ' $',
+                                                                                    mark = ',', before = TRUE)
+        
+
     })
         
     
