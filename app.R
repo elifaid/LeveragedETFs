@@ -1,9 +1,12 @@
-#Added 6/7/2021
-#   add EMA cashflow to plot or figure out how to make it switchable, add EMA to results table  DONE
-#   Make Optimal leverage chart for including 2 strategies DONE
-#   Finding Optimal MA to trade DONE
-#Currently working on: 
-#   Performance stats for all starts (drawdown, CAGR, different way of calcuting returns, number of sales in strategies) Not started yet
+#Added 9/13/2021
+#   Drawdowns for all strategies
+#   Suplemetray Data tab for underlying showing: 
+#                   Average Composite
+#                   Inter vs Intra day price action (if availible)
+#                   Performance based on selected Moving Average
+#                   Monthly performance histogram
+#Working on adding LIBOR rate for accurate borrowing costs
+
 
 library(shiny) #dashboard
 library(tidyverse) #data manipulation
@@ -13,7 +16,7 @@ library(scales) #percentage scales for charts
 library(DT) #better way to make bottom table
 
 ui <- fluidPage(
-
+    
     # Application title
     titlePanel("Simulating Leveraged ETFs using Quantmod"),
     uiOutput("Message1"), # availible tickers
@@ -23,8 +26,8 @@ ui <- fluidPage(
 
             dateInput("date",   
                                h3("Date input"), 
-                               value = "1988-01-01"),     # Default values for sim, works faster when you start from scatch versus just updating the info
-            textInput("ticker","ticker",value="^sp500tr"),
+                               value = "1987-01-01"),     # Default values for sim, works faster when you start from scatch versus just updating the info
+            textInput("ticker","ticker",value="^Sp500TR"),
             numericInput("ER","Expense ratio (%)",value=2),
             numericInput("leverage","Leverage (x) ",value=3),
             numericInput("initial","Initial Amount ",value=1000),
@@ -37,17 +40,25 @@ ui <- fluidPage(
 
         # Show plots
         mainPanel(
+            tabsetPanel(type = "tabs",
+                          tabPanel("Main Data",
             plotlyOutput("Cashflowplot",height="720px",width="1400"),
             plotlyOutput("Comparison",height="720px",width="1400"),
-            #plotlyOutput("Difference",height="720px",width="1400"), commented out because not very useful
+            #plotlyOutput("Difference",height="720px",width="1400"),
             
             fluidRow( #two plots side by side
-                column(6,plotlyOutput("showdays",height="720px")),
+                column(6,plotlyOutput("Different_MAs",height="720px")),
                 column(6,plotlyOutput("Different_Leverages",height="720px"))
                 
             ),
-            plotlyOutput("Different_MAs",height="720px",width="1400"),
-            dataTableOutput("Results_Table") # using dt package
+            plotlyOutput("Drawdown",height="720px"),
+            dataTableOutput("Results_Table") 
+            ),
+            tabPanel("Supplementary",
+                     plotlyOutput("Intraday",height="720px"),
+                     plotlyOutput("showdays",height="720px"),
+                     plotlyOutput("Histogram",height="720px"),
+                     plotlyOutput("Composite",height="720px")))# using dt package 
             
         )
     )
@@ -162,10 +173,98 @@ server <- function(input, output) {
             theme_light()+
             scale_y_continuous(labels = scales::percent)
     })
+    
+    output$Intraday <- renderPlotly({  # Daily performance seprated by if it is above or below the inputed moving average
+        # Rolling One year average
+        x<-Main_dataset_load()%>% 
+            mutate(InterDay=ifelse(row_number()==1,0,(open/lag(close)-1)))%>%
+            mutate(IntraDay=close/open-1)%>%
+            mutate(InterDay_value=cumprod(1+InterDay))%>%
+            mutate(IntraDay_value=cumprod(1+IntraDay))%>%
+            mutate(adjusted=adjusted/adjusted[1])%>%
+            mutate(difference=InterDay_value/IntraDay_value)%>%
+            select(date,IntraDay_value,InterDay_value,adjusted)%>%
+            pivot_longer(!date,names_to = "Type", values_to = "Value")
+        
+        ggplot(data=x,aes(y=Value,x=date,color=Type))+
+            theme_light()+
+            geom_line()+
+            xlab("Date")+
+            ylab("Growth of $1")+
+            ggtitle(paste0("Intra vs Inter day performance of ", gsub('^\\^|\\^$', '', input$ticker)," since ",input$date))+
+            scale_color_manual(values = c("red", "darkgreen","steelblue"))+
+            theme(plot.title = element_text(size=10, face="bold",margin = margin(10, 0, 10, 0)))+scale_y_log10(labels=scales::label_number())
+    
+    })
+    output$Drawdown <- renderPlotly({  # Daily performance seprated by if it is above or below the inputed moving average
+        # Rolling One year average
+        x<-Main_dataset()%>% 
+            mutate(CumMax=cummax(adjusted))%>% 
+            mutate(Original=-(1-(adjusted/CumMax)))%>% 
+            mutate(CumMax=cummax(new_val))%>% 
+            mutate(Leveraged=-(1-(new_val/CumMax)))%>% 
+            mutate(CumMax=cummax(new_val_ema))%>% 
+            mutate(Leveraged_ema=-(1-(new_val_ema/CumMax)))%>% 
+            mutate(CumMax=cummax(new_val_sma))%>% 
+            mutate(Leveraged_sma=-(1-(new_val_sma/CumMax)))%>%
+            select(date,Original,Leveraged,Leveraged_ema,Leveraged_sma)%>%
+            pivot_longer(!date,names_to = "Type",values_to="Drawdown")
+        
+        ggplot(data=x,aes(y=Drawdown,x=date,color=Type))+
+            theme_light()+
+            geom_line()+
+            xlab("Date")+
+            ylab("Drawdown (%)")+
+            ggtitle(paste0("Drawdown of ", gsub('^\\^|\\^$', '', input$ticker)," since ",input$date))+
+            scale_color_manual(values = c("red", "darkgreen","steelblue","Black"))+
+            theme(plot.title = element_text(size=10, face="bold",margin = margin(10, 0, 10, 0)))+scale_y_continuous(labels=scales::label_percent())
+        
+    })
+    output$Histogram <- renderPlotly({
+        Main_dataset_load() %>% 
+            tq_transmute(adjusted, periodReturn, period = "monthly",col_rename = "return") %>%
+            ggplot(aes(x=return))+
+            geom_histogram(color="black", fill="white")+
+            ggtitle("Monthly Returns")+
+            theme_light()+
+            scale_x_continuous(labels = label_percent()) 
+        })
+    
+    output$Composite <- renderPlotly({  # Daily performance seprated by if it is above or below the inputed moving average
+        # Rolling One year average
+        composite<-Main_dataset_load()%>%
+            tq_transmute(adjusted, periodReturn, period = "daily",col_rename = "return") %>% 
+            mutate(date=yday(date))%>%
+            group_by(date)%>%
+            summarise(avg_return=mean(return),count=n())%>%
+            add_row(date=0,avg_return=0, .before = 1)%>%
+            mutate(composite_value=cumprod(1+(avg_return)))%>%
+            mutate(date=as.Date(date,origin="2020-12-31"),type="Composite")
+        
+        YTD<-Main_dataset_load()%>% 
+            filter(date>"2020-12-30")%>% 
+            mutate(composite_value=adjusted/adjusted[1])%>%
+            select(date,composite_value)%>%mutate(type="Year to Date")
+        
+        Final_Data<-bind_rows(composite,YTD)
+        
+        ggplot(data=Final_Data,aes(y=composite_value,x=date,color=type))+
+                     geom_line()+
+                     scale_x_date(date_breaks = "months",date_labels = "%b")+
+                     theme_light()+
+                     theme(plot.title = element_text(size=10, face="bold",margin = margin(10, 0, 10, 0)))+
+                     ggtitle(paste("Average Yearly Composite of", gsub('^\\^|\\^$', '',input$ticker)," since", from_date))+
+                     ylab("Growth (Dec 31 = 100%)")+
+                     xlab("Date")+
+                     scale_colour_manual(values = c("steelblue", "red"))+
+                     scale_y_continuous(labels = label_percent()
+        )
+        
+    })
 
     Main_dataset_load<-reactive({ # load yahoo finance data using quantmod and keep only date,ticker and split adjsuted closing price
         tq_get(input$ticker, get = "stock.prices", from = input$date)%>%
-            select(symbol,date,adjusted)%>% drop_na(adjusted)
+            drop_na(adjusted)
         })
     Main_dataset<- reactive({
         Main_dataset_load()%>%
@@ -262,7 +361,7 @@ server <- function(input, output) {
                                                                                   ifelse(input$Strategy=="-1", 
                                                                                          1,
                                                                                          0)),ER),ER))%>%  
-                mutate(new_val_sma=cumprod(1+growth*leverage-(ER/100)/252))%>%last() %>% select(new_val_sma)%>%pull()#Leveraged Growth after expenses
+                mutate(new_val_sma=cumprod(1+growth*leverage-(ER/100)/252))%>%slice(n()) %>% select(new_val_sma)%>%pull()#Leveraged Growth after expenses
             return(x)
         }
         get_ema_value<- function(EMA_input,leverage){
@@ -285,7 +384,7 @@ server <- function(input, output) {
                                                                                   ifelse(input$Strategy=="-1", 
                                                                                          1,
                                                                                          0)),ER),ER))%>%  
-                mutate(new_val_ema=cumprod(1+growth*leverage-(ER/100)/252))%>%last() %>% select(new_val_ema)%>%pull()#Leveraged Growth after expenses
+                mutate(new_val_ema=cumprod(1+growth*leverage-(ER/100)/252))%>%slice(n()) %>% select(new_val_ema)%>%pull()#Leveraged Growth after expenses
             return(x)
         }
         get_final_value<- function(leverage){
@@ -294,13 +393,13 @@ server <- function(input, output) {
                 mutate(adjusted=adjusted/adjusted[1])%>%
                 mutate(growth=ifelse(row_number()==1,0,(adjusted/lag(adjusted)-1)))%>%
                 mutate(new_val=cumprod(1+growth*leverage -(input$ER/100)/252))%>% 
-                last() %>% 
+                slice(n()) %>% 
                 select(new_val)%>%
                 pull()#Leveraged Growth after expenses
             return(x)
         }
         
-        y1<-seq(from=10,to=500,by=5) #MA from 5 to 500
+        y1<-seq(from=10,to=500,by=5) #MA from 10 to 500
         
         y2<-unlist(lapply(y1,get_sma_value,leverage=input$leverage))
         y4<-unlist(lapply(y1,get_ema_value,leverage=input$leverage))
@@ -335,17 +434,17 @@ server <- function(input, output) {
                 mutate(undersma=ifelse(adjusted<SMA1,"Yes","No"))%>% # SMA  Strategy
                 mutate(action=ifelse(is.na(undersma),"BUY",
                                      ifelse(undersma=="Yes","SELL","BUY"))) %>%
-                mutate(leverage=ifelse(row_number()>1,ifelse(lag(action)=="SELL",ifelse(Strategy=="Cash",
+                mutate(leverage=ifelse(row_number()>1,ifelse(lag(action)=="SELL",ifelse(input$Strategy=="Cash",
                                                                                         0,
-                                                                                        ifelse(Strategy=="-1", 
+                                                                                        ifelse(input$Strategy=="-1", 
                                                                                                -1,
                                                                                                1)),leverage),leverage))%>%
-                mutate(ER=ifelse(row_number()>1,ifelse(lag(action)=="SELL",ifelse(Strategy=="Cash",
+                mutate(ER=ifelse(row_number()>1,ifelse(lag(action)=="SELL",ifelse(input$Strategy=="Cash",
                                                                                   0,
-                                                                                  ifelse(Strategy=="-1", 
+                                                                                  ifelse(input$Strategy=="-1", 
                                                                                          1,
                                                                                          0)),ER),ER))%>%  
-                mutate(new_val_sma=cumprod(1+growth*leverage-(ER/100)/252))%>%last() %>% select(new_val_sma)%>%pull()#Leveraged Growth after expenses
+                mutate(new_val_sma=cumprod(1+growth*leverage-(ER/100)/252))%>%slice(n()) %>% select(new_val_sma)%>%pull()#Leveraged Growth after expenses
             return(x)
         }
         get_ema_value<- function(EMA_input,leverage){
@@ -358,23 +457,23 @@ server <- function(input, output) {
                 mutate(underema=ifelse(adjusted<EMA1,"Yes","No"))%>% # SMA  Strategy
                 mutate(action=ifelse(is.na(underema),"BUY",
                                      ifelse(underema=="Yes","SELL","BUY"))) %>%
-                mutate(leverage=ifelse(row_number()>1,ifelse(lag(action)=="SELL",ifelse(Strategy=="Cash",
+                mutate(leverage=ifelse(row_number()>1,ifelse(lag(action)=="SELL",ifelse(input$Strategy=="Cash",
                                                                                         0,
-                                                                                        ifelse(Strategy=="-1", 
+                                                                                        ifelse(input$Strategy=="-1", 
                                                                                                -1,
                                                                                                1)),leverage),leverage))%>%
-                mutate(ER=ifelse(row_number()>1,ifelse(lag(action)=="SELL",ifelse(Strategy=="Cash",
+                mutate(ER=ifelse(row_number()>1,ifelse(lag(action)=="SELL",ifelse(input$Strategy=="Cash",
                                                                                   0,
-                                                                                  ifelse(Strategy=="-1", 
+                                                                                  ifelse(input$Strategy=="-1", 
                                                                                          1,
                                                                                          0)),ER),ER))%>%  
-                mutate(new_val_ema=cumprod(1+growth*leverage-(ER/100)/252))%>%last() %>% select(new_val_ema)%>%pull()#Leveraged Growth after expenses
+                mutate(new_val_ema=cumprod(1+growth*leverage-(ER/100)/252))%>%slice(n()) %>% select(new_val_ema)%>%pull()#Leveraged Growth after expenses
             return(x)
         }
         get_final_value<- function(leverage){
             x$growth[1]=0
             x<-x %>% mutate(leverage=leverage)
-            x<-x %>% mutate(new_val=cumprod(1+growth*leverage -input$ER/100/252))%>% last() %>% select(new_val)%>%pull()#Leveraged Growth after expenses
+            x<-x %>% mutate(new_val=cumprod(1+growth*leverage -input$ER/100/252))%>%slice(n()) %>% select(new_val)%>%pull()#Leveraged Growth after expenses
             return(x)
         }
         
@@ -389,11 +488,11 @@ server <- function(input, output) {
         y2<-unlist(lapply(y1,get_final_value))
         y3<-unlist(lapply(y1,get_sma_value,SMA_input=input$MA))
         y4<-unlist(lapply(y1,get_ema_value,EMA_input=input$MA))
-        data<-tibble(y1,y2,y3,y4)%>%rename(leverage=y1,final_value=y2,SMA=y3,EMA=y4)%>% 
+        data<-tibble(y1,y2,y3,y4)%>%rename(leverage=y1,final_value=y2,sma_value=y3,ema_value=y4)%>% 
             pivot_longer(!leverage,names_to = "Strategy", values_to = "Final Value")
         
-        ggplot(data=data,aes(y=`Final Value`,x=leverage,colour=Strategy))+
-            geom_line()+
+        ggplot(data=data,aes(y=`Final Value`,x=leverage))+
+            geom_line(aes(color=Strategy))+
             theme_light()+
             ggtitle(paste0("Different leverage ratios for ",ticker, " since ", start))+
             xlab("Leverage")+
