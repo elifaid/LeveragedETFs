@@ -1,11 +1,11 @@
-#Added 9/13/2021
+#Added 9/17/2021
 #   Drawdowns for all strategies
-#   Suplemetray Data tab for underlying showing: 
+#   Supplementary Data tab for underlying showing: 
 #                   Average Composite
 #                   Inter vs Intra day price action (if availible)
 #                   Performance based on selected Moving Average
 #                   Monthly performance histogram
-#Working on adding LIBOR rate for accurate borrowing costs
+#Added LIBOR rate for accurate borrowing costs for 1955-present (no change from 9/16/21 umtil eoy until I update it)
 
 
 library(shiny) #dashboard
@@ -14,6 +14,11 @@ library(tidyquant) #stock prices
 library(plotly) #interactive charts
 library(scales) #percentage scales for charts
 library(DT) #better way to make bottom table
+
+LIBOR <- read_excel("LIBOR.xls", 
+                    sheet = "LIBOR_all_data", col_types = c("date", 
+                                                            "numeric"))
+LIBOR$date<-as.Date(LIBOR$date)
 
 ui <- fluidPage(
     
@@ -58,7 +63,8 @@ ui <- fluidPage(
                      plotlyOutput("Intraday",height="720px"),
                      plotlyOutput("showdays",height="720px"),
                      plotlyOutput("Histogram",height="720px"),
-                     plotlyOutput("Composite",height="720px")))# using dt package 
+                     plotlyOutput("Composite",height="720px"),
+                     plotlyOutput("BorrowCosts",height="720px"),))# using dt package 
             
         )
     )
@@ -153,6 +159,18 @@ server <- function(input, output) {
             geom_hline(yintercept=h,linetype = "dotted")
 
     })
+    output$BorrowCosts <- renderPlotly({
+        # One month LIBOR rate
+        ggplot(data=LIBOR,aes(x=as.Date(date),y=RATE))+geom_line(color="steelblue")+
+            xlab("Year")+
+            ylab("1 Month LIBOR Rate")+
+            ggtitle("Borrowing Costs")+
+            theme_light()+ 
+            theme(plot.title = element_text(size=18, face="bold",margin = margin(10, 0, 10, 0)))+
+            scale_y_continuous(labels = scales::percent)+
+            scale_x_date(date_labels = "%Y",date_breaks="5 years")
+        
+    })
     output$DailyPerformance <- renderPlotly({
         # Rolling One year average
         ggplot(data=Main_dataset(),aes(x=date,y=growth))+geom_line(color="steelblue")+
@@ -165,7 +183,7 @@ server <- function(input, output) {
 
     })
     output$showdays <- renderPlotly({  # Daily performance seprated by if it is above or below the inputed moving average
-        # Rolling One year average
+        # Mean Daily returns based on inputted moving average
         ggplot(data=Main_dataset(),aes(y=growth,x=undersma,fill=undersma))+ geom_bar(stat = "summary", fun = "mean")+
             xlab("Moving Average")+
             ylab("Return (%)")+
@@ -175,7 +193,7 @@ server <- function(input, output) {
     })
     
     output$Intraday <- renderPlotly({  # Daily performance seprated by if it is above or below the inputed moving average
-        # Rolling One year average
+        # Inter vs Intra Day
         x<-Main_dataset_load()%>% 
             mutate(InterDay=ifelse(row_number()==1,0,(open/lag(close)-1)))%>%
             mutate(IntraDay=close/open-1)%>%
@@ -196,8 +214,8 @@ server <- function(input, output) {
             theme(plot.title = element_text(size=10, face="bold",margin = margin(10, 0, 10, 0)))+scale_y_log10(labels=scales::label_number())
     
     })
-    output$Drawdown <- renderPlotly({  # Daily performance seprated by if it is above or below the inputed moving average
-        # Rolling One year average
+    output$Drawdown <- renderPlotly({
+        # Drawdown for each strategy
         x<-Main_dataset()%>% 
             mutate(CumMax=cummax(adjusted))%>% 
             mutate(Original=-(1-(adjusted/CumMax)))%>% 
@@ -230,8 +248,7 @@ server <- function(input, output) {
             scale_x_continuous(labels = label_percent()) 
         })
     
-    output$Composite <- renderPlotly({  # Daily performance seprated by if it is above or below the inputed moving average
-        # Rolling One year average
+    output$Composite <- renderPlotly({  # This Year compared to average of all previous years
         composite<-Main_dataset_load()%>%
             tq_transmute(adjusted, periodReturn, period = "daily",col_rename = "return") %>% 
             mutate(date=yday(date))%>%
@@ -253,7 +270,7 @@ server <- function(input, output) {
                      scale_x_date(date_breaks = "months",date_labels = "%b")+
                      theme_light()+
                      theme(plot.title = element_text(size=10, face="bold",margin = margin(10, 0, 10, 0)))+
-                     ggtitle(paste("Average Yearly Composite of", gsub('^\\^|\\^$', '',input$ticker)," since", from_date))+
+                     ggtitle(paste("Average Yearly Composite of", gsub('^\\^|\\^$', '',input$ticker)," since", input$date))+
                      ylab("Growth (Dec 31 = 100%)")+
                      xlab("Date")+
                      scale_colour_manual(values = c("steelblue", "red"))+
@@ -264,14 +281,14 @@ server <- function(input, output) {
 
     Main_dataset_load<-reactive({ # load yahoo finance data using quantmod and keep only date,ticker and split adjsuted closing price
         tq_get(input$ticker, get = "stock.prices", from = input$date)%>%
-            drop_na(adjusted)
+            drop_na(adjusted) %>% inner_join(LIBOR,by="date")
         })
     Main_dataset<- reactive({
         Main_dataset_load()%>%
             mutate(adjusted=adjusted/adjusted[1])%>% #normalizing data
             mutate(growth=ifelse(row_number()==1,0,adjusted/lag(adjusted)-1)) %>% # Calculate daily performance
             mutate(leverage=input$leverage)%>% # adding leverage and Expense ratio from input, sicne they will be changeable depending to MA status
-            mutate(ER=input$ER)%>%
+            mutate(ER=input$ER+RATE*100)%>%
             mutate(new_val=cumprod(1+growth*leverage-(ER/100)/252))%>% #Value of simulated Leveraged ETF
             mutate(CAGR=((new_val/new_val[1])^(1/(as.numeric(difftime(as.Date(date), as.Date(date[1])))/(60*60*24*365))))-1)%>% # finding CAGR by each day,
             mutate(SMA1=SMA(adjusted,input$MA))%>% #Simple and Exponential Moving Averages
