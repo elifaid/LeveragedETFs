@@ -9,6 +9,6 @@ Theoretical TQQQ since 1995 (99.95% drop)
 
 S&P 500 Total return (theoretical UPRO) since 1988
 ![image](https://user-images.githubusercontent.com/60053486/133191826-7d09f363-8464-4754-83c5-9ce350b3176d.png)
-Suplementary Data
+Supplementary Data
 ![image](https://user-images.githubusercontent.com/60053486/133191895-1c84bdca-0e46-4e51-9ca0-b017632833d6.png)
 
