@@ -5,7 +5,7 @@ Leveraged ETF simulator made using Quantmod and R Shiny for visualizations.
 
 [Hosted on Shinyapps.io](https://elif001.shinyapps.io/Leveraged_ETFS/)
 
-Theoretical TQQQ since 1995 (99.95% drop)
+Theoretical TQQQ since 1987 (99.98% drop)
 ![image](https://github.com/elifaid/LeveragedETFs/assets/60053486/6d97900c-4e38-48ad-afa4-a5cde677627f)
 
 
