@@ -5,10 +5,10 @@ Leveraged ETF simulator made using Quantmod and R Shiny for visualizations.
 
 
 Theoretical TQQQ since 1995 (99.95% drop)
-![image](https://user-images.githubusercontent.com/60053486/121105220-aed1a800-c7d1-11eb-96fa-e0a43d4010a4.png)
+![image](https://github.com/elifaid/LeveragedETFs/assets/60053486/6d97900c-4e38-48ad-afa4-a5cde677627f)
+
 
 S&P 500 Total return (theoretical UPRO) since 1988
-![image](https://user-images.githubusercontent.com/60053486/133191826-7d09f363-8464-4754-83c5-9ce350b3176d.png)
-Supplementary Data
-![image](https://user-images.githubusercontent.com/60053486/133191895-1c84bdca-0e46-4e51-9ca0-b017632833d6.png)
+![image](https://github.com/elifaid/LeveragedETFs/assets/60053486/17fe9134-1c18-474e-aa44-0fe0cc7af495)
+
 
