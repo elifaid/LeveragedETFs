@@ -6,6 +6,7 @@ library(scales) #percentage scales for charts
 library(DT) #better way to make bottom table
 library(zoo) #dates
 library(shinyBS) #popups and other things
+library(ExtDist)
 
 IR <- tq_get("^IRX",from="1960-01-01") %>% 
   select(date,adjusted) %>% 
@@ -149,7 +150,7 @@ server <- function(input, output) {
       geom_line(aes(y=convexity,color="convexity"))+
       geom_line(aes(y=fedfunds,color="FFR"))+
       geom_line(aes(y=return2,color="Total return"))+
-      ggtitle(paste0("Select stats of ",maturity," year US treasury"))+
+      ggtitle(paste0("Select stats of ",input$duration," year US treasury"))+
       ylab("Value")+xlab("Year")+theme_bw()->g
     g<-g+if(input$LOG==TRUE){scale_y_log10(breaks =10^(-10:10),
                                            labels=scales::label_comma(),
