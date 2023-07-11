@@ -4,7 +4,8 @@ library(tidyquant) #stock prices
 library(plotly) #interactive charts
 library(scales) #percentage scales for charts
 library(DT) #better way to make bottom table
-library(zoo)
+library(zoo) #dates
+library(shinyBS) #popups and other things
 
 IR <- tq_get("^IRX",from="1960-01-01") %>% 
   select(date,adjusted) %>% 
@@ -33,17 +34,17 @@ ui <- fluidPage(
       checkboxInput("LOG","Logarithmic Y axis?",value=TRUE),
       numericInput("MA","Moving Average:",value=200),
       selectInput("Strategy","Strategy under MA?",choices=c("Cash","Go to 1x","-1")),
+      selectInput("Strategy_CAGR","Strategy CAGR choice?",choices=c("Original","Leveraged","EMA","SMA")),
       width = 2
     ),
     
     # Show plots
-    mainPanel(
+    mainPanel( width=10,
       tabsetPanel(type = "tabs",
                   tabPanel("Main Data",
-                           plotlyOutput("Cashflowplot",height="720px",width="1400"),
-                           plotlyOutput("Comparison",height="720px",width="1400"),
-                           #plotlyOutput("Difference",height="720px",width="1400"),
-                           
+                           plotlyOutput("Cashflowplot",height="720px"),
+                           plotlyOutput("Comparison",height="720px"),
+                           plotlyOutput("Comparison2",height="720px"),
                            fluidRow( #two plots side by side
                              column(6,plotlyOutput("Different_MAs",height="720px")),
                              column(6,plotlyOutput("Different_Leverages",height="720px"))
@@ -57,7 +58,27 @@ ui <- fluidPage(
                            plotlyOutput("showdays",height="720px"),
                            plotlyOutput("Histogram",height="720px"),
                            plotlyOutput("Composite",height="720px"),
-                           plotlyOutput("BorrowCosts",height="720px"),))# using dt package 
+                           plotlyOutput("BorrowCosts",height="720px")),
+                  tabPanel("Simulation",
+                           uiOutput("Message2"),
+                           numericInput("target_length","Simulation Length (252 trading days per year)",value=1000),
+                           numericInput("mean_return","Mean return (Daily %)",value=0.0468),
+                           numericInput("stdev","Standard Deviation of return (Daily)",value=0.006505),
+                           numericInput("borrow_sim","Cost of Leverage (Annual %)",value=5.25),
+                           plotlyOutput("Simulation",height="720px"),
+                           plotlyOutput("Simulation2",height="720px"),
+                           plotlyOutput("Simulation3",height="720px"),
+                           plotlyOutput("Simulation4",height="720px")
+
+                  ),
+                  tabPanel("Fixed Income Test",
+                           selectInput("duration",label="Years",choices = c(1,2,3,5,7,10,20,30),selected = 30),
+                           plotlyOutput("Bonds1",height="720px"),
+                           plotlyOutput("Bonds2",height="720px"))
+                  #tabPanel("Rebalancing Portfolios",
+                  #         DTOutput("myTable"),
+                  #         plotlyOutput("Equity_Fixed",height = "720px"))
+        )
       
     )
   )
@@ -65,7 +86,179 @@ ui <- fluidPage(
 
 # Define server logic 
 server <- function(input, output) {
-  
+  CombinedData<-reactive({
+    dates<-subset(Main_dataset(), !duplicated(substr(date, 1, 7), fromLast = FALSE)) # first of the month in the data
+    x<-left_join(Main_dataset(),bondData(),by=c("date"="Index")) %>% 
+      mutate(return2=return2/return2[1],return3=return3/return3[1]) %>% 
+      select(date,growth,new_growth,return,return3,leveragedreturn,new_val) %>%
+      mutate(
+        isquarterend=ifelse(date %in% dates$date,TRUE,FALSE),
+        balance1=0.5,
+        balance2=1-balance1,
+        port_value=balance1*new_val+balance2*return3
+      ) %>% 
+      mutate(
+        balance1=if_else(isquarterend==TRUE,balance1*port_value,lag(balance1)),
+        balance2=ifelse(isquarterend==TRUE,
+                        balance2*port_value,
+                        dplyr::lag(balance2)
+        ))
+
+    })
+  output$myTable<-renderDT({
+    CombinedData()
+  })
+  output$Equity_Fixed <-renderPlotly({
+    ggplot(CombinedData(),aes(x=date))+
+      geom_line(aes(y=return3,color="bonds"))+
+      geom_line(aes(y=new_val,color="Sp500"))+
+      geom_line(aes(y=port_value,color="Portfolio"))+
+      theme_bw()->g
+    g<-g+if(input$LOG==TRUE){scale_y_log10(breaks =10^(-10:10),
+                                           labels=scales::label_comma(),
+                                           minor_breaks=rep(1:9, 21)*(10^rep(-10:10, each=9)))}
+  })
+  bondDataLoad <- reactive({
+    symbols<-paste0("DGS",input$duration)
+    q<-getSymbols(symbols,src='FRED',auto.assign=FALSE)
+    q<-q%>% fortify.zoo %>% as.tibble %>% rename(yield=2) %>% drop_na(yield)
+    fedfunds<-getSymbols("RIFSPFFNB",src='FRED',auto.assign=FALSE) %>% 
+      fortify.zoo %>% as.tibble %>% rename(fedfunds=RIFSPFFNB) %>% drop_na(fedfunds)
+    q<-left_join(q,fedfunds,by=c("Index"))
+    })
+  bondData <- reactive({
+    maturity=as.numeric(input$duration)
+    bondDataLoad() %>% fill(fedfunds,.direction = "down") %>% 
+      mutate(duration=(1-(1/(1+0.5*yield/100)^(2*maturity)))/(yield/100),
+             convexity=(2/(yield/100)^2)*(1-(1/(1+yield/200)^(maturity*2)))-(maturity*2)/((yield/100)*(1+yield/200)^(maturity*2+1)),
+             return=ifelse(row_number()==1,0,
+                           (((1+(lag(yield))/100)^(1/252)-1))-
+                             duration*(yield/100-lag(yield/100))+
+                             1/2*convexity*(yield/100-lag(yield/100))^2),
+             return2=cumprod(1+return),
+             leveragedreturn=input$leverage*return-(input$leverage-1)*((1+((fedfunds+input$ER)/100))^(1/365)-1),
+             return3=cumprod(1+leveragedreturn),
+             inverted=ifelse(yield<fedfunds,"yes","no")
+             
+      ) ->x
+  })
+  output$Bonds1<-renderPlotly({
+    bondData() %>% ggplot(aes(x=as.Date(Index)))+
+      geom_line(aes(y=yield,color="yield"))+
+      geom_line(aes(y=duration,color="duration"))+
+      geom_line(aes(y=convexity,color="convexity"))+
+      geom_line(aes(y=fedfunds,color="FFR"))+
+      geom_line(aes(y=return2,color="Total return"))+
+      ggtitle(paste0("Select stats of ",maturity," year US treasury"))+
+      ylab("Value")+xlab("Year")+theme_bw()->g
+    g<-g+if(input$LOG==TRUE){scale_y_log10(breaks =10^(-10:10),
+                                           labels=scales::label_comma(),
+                                           minor_breaks=rep(1:9, 21)*(10^rep(-10:10, each=9)))}
+  })
+  output$Bonds2<-renderPlotly({
+    bondData() %>% ggplot(aes(x=as.Date(Index)))+
+      geom_line(aes(y=return2,color="Unleveraged"))+
+      geom_line(aes(y=return3,color="Leveraged"))+
+      ggtitle(paste0("Performance of ",input$leverage,"times leveraged and unleveraged  ",input$maturity," year US treasury"))+
+              labs(subtitle = paste0("Cost of Leverage = EFFR + ",input$ER,"%"))+
+      ylab("Value")+xlab("Year")+theme_bw()->g
+    g<-g+if(input$LOG==TRUE){scale_y_log10(breaks =10^(-10:10),
+                                           labels=scales::label_comma(),
+                                           minor_breaks=rep(1:9, 21)*(10^rep(-10:10, each=9)))}
+    ggplotly(g) %>% layout(title = list(text = paste0("Performance of ",input$leverage," times leveraged and unleveraged ",maturity," year US treasury",
+                                                      '<br>',
+                                                      '<sup>',
+                                                      "Cost of Leverage = EFFR + ",input$ER,"%",
+                                                      '</sup>'
+                                                      )))
+    
+  })
+  SimulationData <- reactive({
+    no_of_days <- input$target_length
+    starting_price <- 1
+    #set.seed(101) #Set seed for reproducibility of the random numbers
+    daily_mean<-input$mean_return/100 
+    daily_std_dev<-input$stdev
+    
+    no_of_sims <- 250
+    returns_list <- matrix(0, nrow = no_of_sims, ncol = no_of_days) #define matrices
+    prices_list1 <- matrix(0, nrow = no_of_sims, ncol = no_of_days+1)
+    prices_list2 <- matrix(0, nrow = no_of_sims, ncol = no_of_days+1) 
+    
+    #Note: returns_list and prices_list are actually matrices, I just chose a poor name
+    
+    for(i in 1:no_of_sims) { # for loop - 500 iterations
+      returns_list[i,] <- rLaplace(no_of_days, mu=daily_mean, b=daily_std_dev) #Generate random variables
+      prices_list1[i,] <- cumprod(c(starting_price, 1+(returns_list[i,]*input$leverage-((input$ER+(input$leverage-1)*input$borrow_sim)/25200))))#Calculate cumulative product
+      prices_list2[i,] <- cumprod(c(starting_price, 1+(returns_list[i,])))#Calculate cumulative product
+    }
+    
+    #Drawing a plot of 50 first simulations
+    prices_list2<-as.data.frame(prices_list2)
+    prices_list2<-prices_list2 %>% gather(Day,Value,"V2":paste0("V",no_of_days+1))
+    prices_list2<-prices_list2%>% group_by(Day) %>% mutate(Cycle=row_number(),Day=sub('V', '',Day)) %>% select(-V1)
+    as.factor(prices_list2$Day)
+    
+    prices_list1<-as.data.frame(prices_list1)
+    prices_list1<-prices_list1 %>% gather(Day,Value,"V2":paste0("V",no_of_days+1))
+    prices_list1<-prices_list1%>% group_by(Day) %>% mutate(Cycle=row_number(),Day=sub('V', '',Day)) %>% select(-V1)
+    as.factor(prices_list1$Day)
+    
+    prices_list<-merge(prices_list1,prices_list2,by=c("Day","Cycle")) %>% 
+      rename(Original="Value.y",Leveraged="Value.x") %>% gather(Type,Value,Original:Leveraged)
+    })
+  output$Simulation <-renderPlotly({
+    ggplot(SimulationData(),aes(x=as.numeric(Day),
+                           y=as.numeric(Value),
+                           color=Type,
+                           group=as.character(Cycle)))+
+      geom_line(alpha=0.25)+theme_bw()+
+      scale_y_log10()+
+      ylab("Return (Growth of $1)")+
+      xlab("Trading Day")+
+      ggtitle(paste0("Monte Carlo of ",
+                     input$target_length,
+                     " Simulations of inputted values"
+                     ))+geom_smooth(method="lm",se=FALSE,aes(group=1),color="red")
+
+  })
+  output$Simulation2 <-renderPlotly({
+    maxData<-SimulationData() %>% filter(Type=="Original") %>% select(Value) %>% max() #default to limits to edge of oringal data, or else to stretched out by leveraged data
+    SimulationData() %>% filter(Day==input$target_length+1) %>% 
+    ggplot(aes(Value,color=Type))+
+      geom_line(stat = "ecdf")+ #empirical cumulative distribution function 
+      theme_bw()+
+      ggtitle("Cumulative Distribution of returns")+
+      xlab("Return (Growth of $1)")+
+      ylab("Probability")+
+      coord_cartesian(xlim = c(0, maxData))
+    
+  })
+  output$Simulation3 <-renderPlotly({
+    maxData<-SimulationData() %>% filter(Type=="Original") %>% select(Value) %>% max()
+    SimulationData() %>% filter(Day==input$target_length+1) %>% 
+      ggplot(aes(Value,color=Type))+
+      geom_density()+
+      theme_bw()+
+      ggtitle("Distribution of returns")+
+      xlab("Return (Growth of $1)")+
+      ylab("Probability")+
+      coord_cartesian(xlim = c(0, maxData))
+    
+  })
+  output$Simulation4 <-renderPlotly({
+    SimulationData() %>% pivot_wider(names_from = Type,values_from = Value) %>% 
+      select(-Cycle) %>% group_by(Day) %>% 
+      summarize(Value=median(Leveraged/Original),
+                                  q1 = quantile(Leveraged/Original, p = .25),
+                                  q2 = quantile(Leveraged/Original, p = .75)) %>% 
+      pivot_longer(!Day,names_to = "Type",values_to = "Value") %>% 
+      ggplot(aes(y=Value,x=as.numeric(Day),color=Type))+geom_line()+theme_bw()+
+      xlab("Day")+ylab("ratio of Leveraged return/Unleveraged Return")+
+      ggtitle("Comparison of returns of leveraged and unleveraged returns")+
+      geom_abline(intercept = 1, slope = input$mean_return/100-input$borrow_sim/25200)
+
+  })
   output$Comparison <- renderPlotly({
     g<-ggplot(data=Main_dataset(),aes(x=date))+
       geom_line(aes(color = "Simulated",y=new_val))+
@@ -95,6 +288,39 @@ server <- function(input, output) {
     g<-g+if(input$LOG==TRUE){scale_y_log10(breaks =10^(-10:10),
                                            labels=scales::label_comma(),
                                            minor_breaks=rep(1:9, 21)*(10^rep(-10:10, each=9)))}
+    
+  })
+  output$Comparison2 <- renderPlotly({
+    g<-ggplot(data=Main_dataset() %>% mutate(new_val=
+                                               if(input$Strategy_CAGR=="Leveraged"){new_val}
+                                             else if(input$Strategy_CAGR=="Original"){adjusted}
+                                             else if(input$Strategy_CAGR=="SMA"){new_val_sma}
+                                             else if(input$Strategy_CAGR=="EMA"){new_val_ema}
+      ) %>% 
+                mutate(new_val_cagr=new_val^(1/(as.numeric(difftime(date,min(date),units = "days")/365.25)))-1,
+                                             new_val_5yr=((new_val/(lag(new_val,252*5)))^(1/5))-1,
+                                             new_val_2yr=((new_val/(lag(new_val,252*2)))^(1/2))-1,
+                                             new_val_10yr=((new_val/(lag(new_val,252*10)))^(1/10))-1
+                                             ),aes(x=date))+
+      geom_line(aes(color = "Cumulative CAGR",y=new_val_cagr))+
+      geom_line(aes(y=new_val_2yr,color='2 year CAGR'))+
+      geom_line(aes(y=new_val_10yr,color='10 year CAGR'))+
+      xlab("Year")+
+      ylab("CAGR (%)")+
+      ggtitle(paste0("CAGRs of ",
+                     gsub('^\\^|\\^$', '', Main_dataset()$symbol[1]),
+                     " strategies since ",
+                     Main_dataset()$date[1]))+
+      theme(plot.title = element_text(size=24, face="bold",margin = margin(10, 0, 10, 0)))+
+      theme_light()+
+      scale_x_date(date_labels = "%Y",date_breaks="5 years")+
+      geom_line(aes(y=new_val_5yr,color='5 year CAGR'))+
+      scale_y_continuous(labels = scales::percent,limits=c(-1,1))+
+      scale_colour_manual(values =c('Cumulative CAGR'='steelblue',
+                                    '5 year CAGR'='red',
+                                    "10 year CAGR"="green",
+                                    "2 year CAGR"="yellow"))+
+      theme(plot.title = element_text(size=18, face="bold",margin = margin(10, 0, 10, 0)))
     
   })
   output$Difference <- renderPlotly({
@@ -153,7 +379,7 @@ server <- function(input, output) {
     
   })
   output$BorrowCosts <- renderPlotly({
-    # Us 3 month yield
+    # US 3 month yield
     g<-ggplot(data=LIBOR,aes(x=as.Date(date),y=RATE,text=RATE*100))+
       geom_line(color="steelblue")+
       xlab("Year")+
@@ -176,7 +402,7 @@ server <- function(input, output) {
       scale_x_date(date_labels = "%Y",date_breaks="5 years")
     
   })
-  output$showdays <- renderPlotly({  # Daily performance seperated by if it is above or below the inputed moving average
+  output$showdays <- renderPlotly({  # Daily performance separated by if it is above or below the inputted moving average
     # Mean Daily returns based on inputted moving average
     ggplot(data=Main_dataset(),aes(y=growth,x=undersma,fill=undersma))+ geom_bar(stat = "summary", fun = "mean")+
       xlab("Moving Average")+
@@ -186,7 +412,7 @@ server <- function(input, output) {
       scale_y_continuous(labels = scales::percent)
   })
   
-  output$Intraday <- renderPlotly({  # Daily performance seperated by if it is above or below the inputed moving average
+  output$Intraday <- renderPlotly({  # Daily performance separated by if it is above or below the inputted moving average
     # Inter vs Intra Day
     x<-Main_dataset_load()%>% 
       mutate(InterDay=ifelse(row_number()==1,0,(open/lag(close)-1)))%>%
@@ -234,10 +460,10 @@ server <- function(input, output) {
   })
   output$Histogram <- renderPlotly({
     Main_dataset_load() %>% 
-      tq_transmute(adjusted, periodReturn, period = "monthly",col_rename = "return") %>%
+      tq_transmute(adjusted, periodReturn, period = "daily",col_rename = "return") %>%
       ggplot(aes(x=return))+
-      geom_histogram(color="black", fill="white")+
-      ggtitle("Monthly Returns")+
+      geom_density(adjust = 1/5)+
+      ggtitle("Daily Returns")+
       theme_light()+
       scale_x_continuous(labels = label_percent()) 
   })
@@ -283,7 +509,8 @@ server <- function(input, output) {
       mutate(growth=ifelse(row_number()==1,0,adjusted/lag(adjusted)-1)) %>% # Calculate daily performance
       mutate(leverage=input$leverage)%>% # adding leverage and Expense ratio from input, since they will be changeable depending to MA status
       mutate(ER=input$ER+(RATE*(leverage-1))*100)%>%
-      mutate(new_val=cumprod(1+growth*leverage-(ER/100)/252))%>% #Value of simulated Leveraged ETF
+      mutate(new_growth=growth*leverage-(ER/100)/252) %>% 
+      mutate(new_val=cumprod(1+new_growth))%>% #Value of simulated Leveraged ETF
       mutate(CAGR=((new_val/new_val[1])^(1/(as.numeric(difftime(as.Date(date), as.Date(date[1])))/(60*60*24*365))))-1)%>% # finding CAGR by each day,
       mutate(SMA1=SMA(adjusted,input$MA))%>% #Simple and Exponential Moving Averages
       mutate(EMA1=EMA(adjusted,input$MA))%>%
@@ -527,8 +754,12 @@ server <- function(input, output) {
              Nasdaq 100: ^NDX<br>
              Bitcoin: BTC-USD<br>
              Ethereum: ETH-USD")
-  })    
+  })
   
+  output$Message2<- renderUI({
+    HTML(paste0(input$ticker," MEAN: ",round(mean(Main_dataset()$growth)*100,4),"<br>",
+             input$ticker," STD DEV: ",round(STDEV(Main_dataset()$growth)*100,4)))
+  })  
   output$Results_Table<- DT::renderDataTable({
     datatable(Cashflows()%>% filter(row_number()==n()|  # most recent
                                       date =="2020-02-20"| # precovid top
@@ -536,8 +767,8 @@ server <- function(input, output) {
                                       date =="2007-10-09"| # pre GFC top
                                       date =="2009-03-05"| # GFC bottom
                                       date =="2000-03-10"| # dotcom top
-                                      date =="2020-03-23"  # covid bottom
-                                   
+                                      date =="2020-03-23"|  # covid bottom
+                                      date =="2022-01-04"   #QE infinity Top
     )%>% 
       select(date,Contributions,DCA_val2,DCA_val,DCA_val3,DCA_val4),colnames = c('Date','Contributions', 'Unleveraged', 'Leveraged', 'Leveraged with SMA','Leveraged with EMA'))%>%
       formatCurrency(c('Contributions', 'DCA_val', 'DCA_val2', 'DCA_val3','DCA_val4'), currency = ' $',
