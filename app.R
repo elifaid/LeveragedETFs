@@ -159,13 +159,13 @@ server <- function(input, output) {
     bondData() %>% ggplot(aes(x=as.Date(Index)))+
       geom_line(aes(y=return2,color="Unleveraged"))+
       geom_line(aes(y=return3,color="Leveraged"))+
-      ggtitle(paste0("Performance of ",input$leverage,"times leveraged and unleveraged  ",input$maturity," year US treasury"))+
+      ggtitle(paste0("Performance of ",input$leverage,"times leveraged and unleveraged  ",input$duration," year US treasury"))+
               labs(subtitle = paste0("Cost of Leverage = EFFR + ",input$ER,"%"))+
       ylab("Value")+xlab("Year")+theme_bw()->g
     g<-g+if(input$LOG==TRUE){scale_y_log10(breaks =10^(-10:10),
                                            labels=scales::label_comma(),
                                            minor_breaks=rep(1:9, 21)*(10^rep(-10:10, each=9)))}
-    ggplotly(g) %>% layout(title = list(text = paste0("Performance of ",input$leverage," times leveraged and unleveraged ",maturity," year US treasury",
+    ggplotly(g) %>% layout(title = list(text = paste0("Performance of ",input$leverage," times leveraged and unleveraged ",input$duration," year US treasury",
                                                       '<br>',
                                                       '<sup>',
                                                       "Cost of Leverage = EFFR + ",input$ER,"%",
