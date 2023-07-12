@@ -62,7 +62,7 @@ ui <- fluidPage(
                            plotlyOutput("BorrowCosts",height="720px")),
                   tabPanel("Simulation",
                            uiOutput("Message2"),
-                           numericInput("target_length","Simulation Length (252 trading days per year)",value=1000),
+                           numericInput("target_length","Simulation Length (252 trading days per year)",value=100),
                            numericInput("mean_return","Mean return (Daily %)",value=0.0468),
                            numericInput("stdev","Standard Deviation of return (Daily)",value=0.006505),
                            numericInput("borrow_sim","Cost of Leverage (Annual %)",value=5.25),
@@ -181,7 +181,7 @@ server <- function(input, output) {
     daily_mean<-input$mean_return/100 
     daily_std_dev<-input$stdev
     
-    no_of_sims <- 250
+    no_of_sims <- 252
     returns_list <- matrix(0, nrow = no_of_sims, ncol = no_of_days) #define matrices
     prices_list1 <- matrix(0, nrow = no_of_sims, ncol = no_of_days+1)
     prices_list2 <- matrix(0, nrow = no_of_sims, ncol = no_of_days+1) 
