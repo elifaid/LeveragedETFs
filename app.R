@@ -6,6 +6,9 @@ library(scales) #percentage scales for charts
 library(DT) #better way to make bottom table
 library(zoo) #dates
 library(ExtDist)# Laplace distribution
+library(officer)
+library(rvg)
+
 
 IR <- tq_get("^IRX",from="1960-01-01") %>% 
   select(date,adjusted) %>% 
@@ -76,7 +79,8 @@ ui <- fluidPage(
                            selectInput("duration",label="Years",choices = c(1,2,3,5,7,10,20,30),selected = 30),
                            plotlyOutput("Bonds1",height="720px"),
                            plotlyOutput("Bonds2",height="720px"),
-                           downloadButton("downloadInfo", "Download Bond Data"))
+                           downloadButton("downloadInfo", "Download Bond Data"),
+                           downloadButton("downloadPPT", "Download As PowerPoint"))
                   #tabPanel("Rebalancing Portfolios",
                   #         DTOutput("myTable"),
                   #         plotlyOutput("Equity_Fixed",height = "720px"))
@@ -94,6 +98,35 @@ server <- function(input, output) {
   output$downloadInfo2<- downloadHandler(
     filename= "myFile.csv",
     content=function(file) {write.table(Main_dataset(),file,row.names=FALSE)})
+  
+  output$downloadPPT<- downloadHandler(
+    filename= function(){"myFile.pptx"},
+    content=function(file) {
+      bondData() %>% select(Index,yield,convexity,duration,fedfunds,return2,return3) %>% 
+        rename(Duration=duration,
+               Convexity=convexity,
+               'Effective Federal Funds Rate'=fedfunds,
+               "Total Return"=return2,
+               "Total Return (Leveraged)"=return3,
+               Yield=yield
+               ) %>% 
+        pivot_longer(-Index,names_to = "Measure",values_to = "Value") %>% 
+        ggplot(aes(y=Value,x=as.Date(Index),color=Measure))+
+        geom_line()+
+        guides(colour="none")+
+        facet_wrap(.~Measure,scales = "free")+
+        theme(panel.spacing = unit(1, "lines"),
+              legend.position =c(0.9, 0.6) )+
+        ggtitle(paste0("Select stats of ",input$duration," year US treasury"))+
+        ylab("Value")+xlab("Year")+theme_bw()->g
+      g<-g+if(input$LOG==TRUE){scale_y_log10(breaks =10^(-10:10),
+                                             labels=scales::label_comma(),
+                                             minor_breaks=rep(1:9, 21)*(10^rep(-10:10, each=9)))}
+      x<-read_pptx() %>% 
+        add_slide(layout = "Title and Content", master = "Office Theme") %>% 
+        ph_with(dml(ggobj = g),location = ph_location_fullsize())
+      print(x,target = file)
+      })
   
   CombinedData<-reactive({
     dates<-subset(Main_dataset(), !duplicated(substr(date, 1, 7), fromLast = FALSE)) # first of the month in the data
@@ -152,7 +185,14 @@ server <- function(input, output) {
       ) ->x
   })
   output$Bonds1<-renderPlotly({
-    bondData() %>% select(Index,yield,convexity,duration,fedfunds,return2,return3) %>% 
+    bondData() %>% select(Index,yield,convexity,duration,fedfunds,return2,return3) %>%
+      rename(Duration=duration,
+             Convexity=convexity,
+             'Effective Federal Funds Rate'=fedfunds,
+             "Total Return"=return2,
+             "Total Return (Leveraged)"=return3,
+             Yield=yield
+      ) %>% 
     pivot_longer(-Index,names_to = "Measure",values_to = "Value") %>% 
       ggplot(aes(y=Value,x=as.Date(Index),color=Measure))+
       geom_line()+
