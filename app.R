@@ -8,6 +8,7 @@ library(zoo) #dates
 library(ExtDist)# Laplace distribution
 library(officer)
 library(rvg)
+library(flextable)
 
 
 IR <- tq_get("^IRX",from="1960-01-01") %>% 
@@ -122,9 +123,22 @@ server <- function(input, output) {
       g<-g+if(input$LOG==TRUE){scale_y_log10(breaks =10^(-10:10),
                                              labels=scales::label_comma(),
                                              minor_breaks=rep(1:9, 21)*(10^rep(-10:10, each=9)))}
+      CurDate<-bondData() %>% 
+        filter(row_number()==n()) %>% select(Index)
+      
+      currentStats<-bondData() %>% 
+        filter(row_number()==n()) %>% 
+        select(Index,yield,convexity,duration,fedfunds) %>% rename(Duration=duration,
+                                                                   Convexity=convexity,
+                                                                   'Effective Federal Funds Rate'=fedfunds,
+                                                                   Yield=yield) %>% 
+        flextable() %>% 
+        autofit()
+
       x<-read_pptx() %>% 
         add_slide(layout = "Title and Content", master = "Office Theme") %>% 
-        ph_with(dml(ggobj = g),location = ph_location_fullsize())
+        ph_with(dml(ggobj = g),location = ph_location(left=0,top=0,height=6,width=10)) %>% 
+        ph_with(currentStats,location = ph_location(left=1,top=6.1))
       print(x,target = file)
       })
   
